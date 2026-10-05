@@ -42,7 +42,7 @@ function Letter({ title, body, typingTitle, done, showPen }) {
           </p>
         ))}
       </div>
-      {done && <p className="lt-sign">— dengan sepenuh hati ♥</p>}
+      {done && <p className="lt-sign">dari abang tercinta ♥</p>}
     </>
   )
 }

@@ -22,12 +22,36 @@ const RATIO = 1.25        // tinggi / lebar halaman
 const PAD = 0.045         // tebal sampul (case) di sekeliling halaman, relatif ke lebar halaman
 const STACK = 0.03        // tebal maksimum tumpukan kertas
 
-// Selalu tampil sebagai buku terbuka dua halaman, di HP sekalipun
-function computeLayout() {
-  const vw = window.innerWidth
-  const vh = window.innerHeight
+const isTouchDevice = () => window.matchMedia('(pointer: coarse)').matches
+
+// Masuk layar penuh + kunci orientasi landscape (Android). iOS tidak mendukung,
+// jadi pemanggil jatuh ke mode putar CSS.
+async function tryLockLandscape() {
+  const attempt = (async () => {
+    try {
+      const el = document.documentElement
+      if (!document.fullscreenElement && el.requestFullscreen) await el.requestFullscreen({ navigationUI: 'hide' })
+      await screen.orientation?.lock?.('landscape')
+    } catch (e) {}
+  })()
+  // Di sebagian browser janji lock() tak pernah selesai; jangan sampai buku ikut menunggu
+  await Promise.race([attempt, new Promise(r => setTimeout(r, 900))])
+}
+
+function releaseLandscape() {
+  try { screen.orientation?.unlock?.() } catch (e) {}
+  if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {})
+}
+
+// Selalu tampil sebagai buku terbuka dua halaman, di HP sekalipun.
+// forced = pembaca meminta mode menyamping; kalau layar masih tegak, isi scene diputar 90°.
+function computeLayout(forced) {
+  const rotated = forced && window.innerWidth < window.innerHeight
+  const vw = rotated ? window.innerHeight : window.innerWidth
+  const vh = rotated ? window.innerWidth : window.innerHeight
   const availW = vw - (vw < 600 ? 10 : 24)
-  const availH = vh * 0.8 - 40
+  // Sisakan ruang untuk teks petunjuk (+ tombol putar di perangkat sentuh)
+  const availH = vh * (forced ? 0.9 : 0.8) - (isTouchDevice() ? 86 : 40)
   const raw = Math.min(availW / (2 + PAD * 2 + STACK * 2), availH / (RATIO + PAD * 2), 520)
 
   const w = Math.max(100, Math.floor(raw))
@@ -35,6 +59,7 @@ function computeLayout() {
   const pad = Math.round(w * PAD)
   const stack = Math.max(2, Math.round(w * STACK))
   return {
+    rotated, vw, vh,
     w, h, pad, stack,
     outerW: pad * 2 + stack * 2 + w * 2,
     outerH: h + pad * 2,
@@ -101,9 +126,14 @@ export default function BookScene({ onDone }) {
   const [page, setPage] = useState(0)
   const [busy, setBusy] = useState(false)
   const [tapped, setTapped] = useState(false)
+  const [forced, setForced] = useState(false)
+  const forcingRef = useRef(false)
+  const pageRef = useRef(0)
+  const swipeRef = useRef(null)
+  const flipAreaRef = useRef(null)
 
   useEffect(() => {
-    setLayout(computeLayout())
+    setLayout(computeLayout(forced))
     // Hanya bereaksi pada perubahan lebar/orientasi; perubahan tinggi akibat
     // address bar HP yang muncul-hilang saat menggeser tidak boleh me-reset buku.
     let lastW = window.innerWidth
@@ -113,11 +143,57 @@ export default function BookScene({ onDone }) {
       if (window.innerWidth === lastW && landscape === lastLandscape) return
       lastW = window.innerWidth
       lastLandscape = landscape
-      setLayout(computeLayout())
+      setLayout(computeLayout(forced))
     }
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
-  }, [])
+  }, [forced])
+
+  // Kembalikan orientasi & keluar layar penuh saat meninggalkan photobook
+  useEffect(() => () => { if (forcingRef.current) releaseLandscape() }, [])
+
+  // Tombol putar hanya untuk perangkat layar sentuh (HP/tablet)
+  const [touch, setTouch] = useState(false)
+  useEffect(() => { setTouch(isTouchDevice()) }, [])
+
+  // Tombol putar: masuk/keluar mode menyamping. Kalau layar masih tegak, isi scene diputar CSS.
+  const toggleLandscape = async (e) => {
+    e.stopPropagation()
+    if (forced) {
+      forcingRef.current = false
+      releaseLandscape()
+      setForced(false)
+      return
+    }
+    forcingRef.current = true
+    await tryLockLandscape()
+    setForced(true)
+  }
+
+  // Saat isi scene diputar CSS, koordinat sentuhan react-pageflip jadi salah,
+  // jadi ketuk & geser ditangani sendiri. Sumbu-x buku = sumbu-y layar.
+  const onRotPointerDown = (e) => {
+    swipeRef.current = e.target.closest('.pb-rotate') ? null : { y: e.clientY, t: Date.now() }
+  }
+  const onRotPointerUp = (e) => {
+    const start = swipeRef.current
+    swipeRef.current = null
+    const flip = bookRef.current?.pageFlip()
+    if (!start || !flip || busy) return
+    const dy = e.clientY - start.y
+    if (Math.abs(dy) > 30) {
+      if (dy < 0) flip.flipNext()
+      else if (pageRef.current > 0) flip.flipPrev()
+      return
+    }
+    if (pageRef.current >= TOTAL - 1) return // sampul belakang ditangani handleBackTap
+    if (pageRef.current === 0) { flip.flipNext(); return }
+    const r = flipAreaRef.current?.getBoundingClientRect()
+    if (!r) return
+    const f = (e.clientY - r.top) / r.height
+    if (f >= 0.5) flip.flipNext()
+    else flip.flipPrev()
+  }
 
   // Muat semua halaman di depan supaya halaman berikutnya sudah siap saat digeser
   useEffect(() => {
@@ -139,7 +215,7 @@ export default function BookScene({ onDone }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  const handleFlip = useCallback((e) => setPage(e.data), [])
+  const handleFlip = useCallback((e) => { pageRef.current = e.data; setPage(e.data) }, [])
   const handleState = useCallback((e) => setBusy(e.data !== 'read'), [])
 
   // Children harus stabil: react-pageflip memuat ulang semua halaman
@@ -162,7 +238,7 @@ export default function BookScene({ onDone }) {
   }
 
   if (!layout) return null
-  const { w, h, pad, stack, outerW, outerH, bookLeft } = layout
+  const { rotated, vw, vh, w, h, pad, stack, outerW, outerH, bookLeft } = layout
 
   // Buku tertutup digeser supaya sampulnya berada di tengah
   const shift = isCover ? -w / 2 : isEnd ? w / 2 : 0
@@ -174,10 +250,13 @@ export default function BookScene({ onDone }) {
     <>
       <style>{CSS}</style>
 
-      <div className="scene" style={{
-        zIndex: 10, display: 'flex', flexDirection: 'column',
-        justifyContent: 'center', alignItems: 'center', height: '100dvh', gap: 16,
-      }}>
+      <div className="scene" style={{ zIndex: 10 }}>
+      <div
+        className={`pb-frame${rotated ? ' is-rotated' : ''}`}
+        style={rotated ? { width: vw, height: vh } : undefined}
+        onPointerDown={rotated ? onRotPointerDown : undefined}
+        onPointerUp={rotated ? onRotPointerUp : undefined}
+      >
         <div style={{
           opacity: ready ? 1 : 0,
           transition: 'opacity 500ms ease-out',
@@ -203,10 +282,12 @@ export default function BookScene({ onDone }) {
               left: bookLeft + w * 2, width: rightStack,
             }} />
 
-            <div style={{ position: 'absolute', left: bookLeft, top: pad, width: w * 2, height: h }}>
+            <div ref={flipAreaRef} style={{ position: 'absolute', left: bookLeft, top: pad, width: w * 2, height: h }}>
               <HTMLFlipBook
-                key={w}
+                key={`${w}-${rotated}`}
                 ref={bookRef}
+                startPage={pageRef.current}
+                useMouseEvents={!rotated}
                 width={w}
                 height={h}
                 size="fixed"
@@ -249,12 +330,47 @@ export default function BookScene({ onDone }) {
             : isEnd ? (tapped ? '' : 'ketuk buku untuk melanjutkan ♥')
             : `${page}–${page + 1} / ${TOTAL - 2}`}
         </p>
+
+        {touch && ready && (
+          <button
+            type="button"
+            className={`pb-rotate${forced ? ' is-on' : ''}`}
+            onClick={toggleLandscape}
+            aria-label={forced ? 'Kembalikan ke tampilan tegak' : 'Putar ke tampilan menyamping'}
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <rect x="7" y="2.5" width="10" height="19" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8"
+                transform={forced ? undefined : 'rotate(90 12 12)'} />
+              <path d="M19.5 8.5a8 8 0 0 0-5-5M14.5 3.5l.2 2.6M14.5 3.5l2.5-.6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            </svg>
+            {forced ? 'Tampilan tegak' : 'Putar layar'}
+          </button>
+        )}
+      </div>
       </div>
     </>
   )
 }
 
 const CSS = `
+  .pb-frame {
+    width: 100%; height: 100dvh;
+    display: flex; flex-direction: column;
+    justify-content: center; align-items: center; gap: 16px;
+  }
+  /* Layar HP masih tegak: putar isi 90° searah jarum jam supaya dibaca dengan HP dimiringkan */
+  .pb-frame.is-rotated {
+    position: fixed; left: 50%; top: 50%;
+    gap: 10px;
+    transform: translate(-50%, -50%) rotate(90deg);
+    animation: pbRotIn .5s ease both;
+    touch-action: none;
+  }
+  @keyframes pbRotIn {
+    from { opacity: 0; transform: translate(-50%, -50%) rotate(90deg) scale(.92) }
+    to   { opacity: 1; transform: translate(-50%, -50%) rotate(90deg) scale(1) }
+  }
+
   .pb-stage {
     position: relative;
     transition: transform 750ms cubic-bezier(.25,.8,.25,1);
@@ -386,6 +502,17 @@ const CSS = `
     box-shadow: 0 0 30px rgba(255,105,180,.8), inset 0 0 30px rgba(255,105,180,.3);
     animation: pbFrameIn .5s cubic-bezier(.34,1.56,.64,1) forwards;
   }
+  .pb-rotate {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 8px 16px; border-radius: 999px; cursor: pointer;
+    border: 1px solid rgba(255,182,217,.55);
+    background: rgba(255,20,147,.14); color: #ffd1e6;
+    font-family: Georgia, 'Times New Roman', serif; font-size: 13px; letter-spacing: .03em;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    transition: background .2s ease, transform .15s ease;
+  }
+  .pb-rotate:active { transform: scale(.96); }
+  .pb-rotate.is-on { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.35); color: #fff; }
   .pb-hint {
     margin: 0; min-height: 20px;
     color: rgba(255,182,217,.85);
