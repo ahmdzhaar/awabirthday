@@ -1,0 +1,49 @@
+name: Deploy ke VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-awabirthday
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      DEPLOY_PATH: /var/www/awabirthday/current
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (static export ke out/)
+        run: npm run build
+
+      - name: Siapkan SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
+
+      - name: Upload ke VPS
+        run: |
+          rsync -az --delete-after \
+            -e "ssh -i ~/.ssh/id_deploy" \
+            out/ "$VPS_USER@$VPS_HOST:$DEPLOY_PATH/"
+
+      - name: Cek situs
+        run: curl -fsS -o /dev/null -w "HTTP %{http_code}\n" https://awabirthday.ourmemories.my.id/
