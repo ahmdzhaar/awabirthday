@@ -9,18 +9,23 @@ const greatVibes = Great_Vibes({
   display: 'swap',
 })
 
-const BASE_PHOTOS = [
-  '/photobook/02.webp',
-  '/photobook/07.webp',
-  '/photobook/09.webp',
-  '/photobook/10.webp',
-  '/photobook/13.webp',
-  '/photobook/15.webp',
-  '/photobook/17.webp',
-  '/photobook/18.webp',
+// Foto dari assets/foto, diubah ke webp: /finale/NN.webp (maks 1000px) dan /finale/thumb/NN.webp (320px persegi).
+// [lebar, tinggi] versi besar dipakai agar galeri tidak "loncat" saat gambar dimuat ketika auto-scroll.
+const FINALE_SIZES = [
+  [750, 1000], [750, 1000], [563, 1000], [659, 1000], [563, 1000], [680, 1000], [750, 1000],
+  [750, 1000], [600, 1000], [750, 1000], [1000, 562], [1000, 750], [1000, 750], [750, 1000],
+  [741, 1000], [563, 1000], [563, 1000], [563, 1000], [563, 1000], [563, 1000], [563, 1000],
+  [563, 1000], [563, 1000], [750, 1000], [750, 1000], [666, 1000], [563, 1000],
 ]
+const GALLERY = FINALE_SIZES.map(([w, h], i) => {
+  const id = String(i + 1).padStart(2, '0')
+  return { src: `/finale/${id}.webp`, thumb: `/finale/thumb/${id}.webp`, w, h }
+})
+const PHOTOS = GALLERY.map(p => p.thumb)
 
-const PHOTOS = Array.from({ length: 24 }, (_, i) => BASE_PHOTOS[i % BASE_PHOTOS.length])
+const AUTO_SCROLL_SPEED = 30      // px per detik
+const AUTO_SCROLL_START = 2500    // jeda setelah judul muncul sebelum mulai bergulir
+const AUTO_SCROLL_RESUME = 4000   // lanjut bergulir setelah pembaca berhenti menyentuh/menggulir
 const FALLBACKS = ['♡', '✦', '♥', '✧']
 const POLAROID_LABELS = [
   'happy birthday', 'with love', 'love you ♥', 'forever ♥',
@@ -238,8 +243,55 @@ export default function HeartFinale() {
   const [isBeating, setIsBeating] = useState(false)
   const [visibleCount, setVisibleCount] = useState(0)
   const confettiRef = useRef(null)
+  const scrollRef = useRef(null)
   const targetPos = useMemo(() => heartPositions(PHOTOS.length), [])
   const { container: containerSize, card: cardSize } = useHeartSize()
+
+  // Auto-scroll pelan ke bawah setelah hati selesai terbentuk.
+  // Berhenti sejenak saat pembaca menyentuh/menggulir sendiri, lalu lanjut dari posisi terakhir.
+  useEffect(() => {
+    if (!titleVisible) return
+    const el = scrollRef.current
+    if (!el) return
+    let raf
+    let last = null
+    let pos = el.scrollTop
+    let pausedUntil = performance.now() + AUTO_SCROLL_START
+    const pause = () => { pausedUntil = performance.now() + AUTO_SCROLL_RESUME }
+    const tick = (t) => {
+      const dt = last === null ? 0 : Math.min(64, t - last)
+      last = t
+      if (t < pausedUntil) {
+        pos = el.scrollTop
+      } else {
+        pos += (AUTO_SCROLL_SPEED * dt) / 1000
+        el.scrollTop = pos
+        if (el.scrollTop + el.clientHeight >= el.scrollHeight - 1) return // sudah sampai bawah
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    const opts = { passive: true }
+    const events = ['wheel', 'touchstart', 'touchmove', 'pointerdown', 'keydown']
+    events.forEach(ev => el.addEventListener(ev, pause, opts))
+    return () => {
+      cancelAnimationFrame(raf)
+      events.forEach(ev => el.removeEventListener(ev, pause, opts))
+    }
+  }, [titleVisible])
+
+  // Bingkai foto muncul perlahan ketika masuk layar
+  useEffect(() => {
+    const root = scrollRef.current
+    if (!root) return
+    const io = new IntersectionObserver(entries => {
+      entries.forEach(e => {
+        if (e.isIntersecting) { e.target.classList.add('is-in'); io.unobserve(e.target) }
+      })
+    }, { root, rootMargin: '0px 0px -8% 0px' })
+    root.querySelectorAll('.hf-frame').forEach(f => io.observe(f))
+    return () => io.disconnect()
+  }, [])
 
   useEffect(() => {
     const BATCH = 4
@@ -264,6 +316,7 @@ export default function HeartFinale() {
 
   return (
     <>
+      <style>{GALLERY_CSS}</style>
       <style>{`
         @keyframes popIn {
           0%   { opacity: 0; transform: scale(0) rotate(0deg); }
@@ -288,6 +341,7 @@ export default function HeartFinale() {
         pointerEvents: 'none', opacity: 0, transition: 'opacity .65s ease',
       }} />
 
+      <div className="hf-scroll" ref={scrollRef}>
       <div style={{
         width: '100%', minHeight: '100dvh',
         display: 'flex', flexDirection: 'column',
@@ -295,6 +349,7 @@ export default function HeartFinale() {
         gap: 'clamp(4px, 1vh, 10px)',
         padding: '16px', paddingTop: '8vh',
         boxSizing: 'border-box',
+        position: 'relative',
       }}>
         {/* Title */}
         <div style={{
@@ -365,7 +420,218 @@ export default function HeartFinale() {
             />
           ))}
         </div>
+
+        <p className={`hf-down ${titleVisible ? 'is-on' : ''}`} aria-hidden="true">
+          kenangan kita ↓
+        </p>
+      </div>
+
+      {/* Galeri: setiap foto dalam bingkainya sendiri */}
+      <section className="hf-gallery">
+        <h2 className={`${greatVibes.className} hf-gallery-title`}>Kenangan Kita</h2>
+        <div className="hf-grid">
+          {GALLERY.map((p, i) => (
+            <figure
+              key={p.src}
+              className={`hf-frame hf-v${i % FRAME_STYLES}`}
+              style={{ '--tilt': `${ORGANIC_ROTATIONS[i % ORGANIC_ROTATIONS.length] * 0.35}deg` }}
+            >
+              <div className="hf-mat">
+                <img
+                  src={p.src}
+                  alt={`Kenangan ${i + 1}`}
+                  width={p.w}
+                  height={p.h}
+                  loading="lazy"
+                  decoding="async"
+                />
+              </div>
+              <figcaption className={greatVibes.className}>
+                {POLAROID_LABELS[i % POLAROID_LABELS.length]}
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+        <p className={`${greatVibes.className} hf-end`}>Happy 19th Birthday, Nazwa ♥</p>
+      </section>
       </div>
     </>
   )
 }
+
+// Jumlah gaya bingkai (.hf-v0 … .hf-v5), dipakai bergiliran
+const FRAME_STYLES = 6
+
+const GALLERY_CSS = `
+  .hf-scroll {
+    position: fixed; inset: 0; z-index: 10;
+    overflow-x: hidden; overflow-y: auto;
+    -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+    scrollbar-width: none;
+  }
+  .hf-scroll::-webkit-scrollbar { display: none; }
+
+  .hf-down {
+    position: absolute; left: 0; right: 0; bottom: max(14px, env(safe-area-inset-bottom));
+    margin: 0; text-align: center;
+    font-family: Georgia, 'Times New Roman', serif; font-style: italic;
+    font-size: 13px; letter-spacing: .08em; color: rgba(255,214,232,.75);
+    opacity: 0; transition: opacity 1.2s ease 1.2s;
+    pointer-events: none;
+  }
+  .hf-down.is-on { opacity: 1; animation: hfBob 2.4s ease-in-out 2.4s infinite; }
+
+  .hf-gallery {
+    width: min(1180px, 100%); margin: 0 auto;
+    padding: clamp(24px, 6vh, 64px) clamp(16px, 4vw, 40px) clamp(64px, 14vh, 140px);
+    box-sizing: border-box;
+  }
+  .hf-gallery-title {
+    margin: 0 0 clamp(20px, 4vh, 40px); text-align: center; font-weight: 400;
+    font-size: clamp(36px, 9vw, 64px); line-height: 1.1; color: #fff0f6;
+    text-shadow: 0 0 18px rgba(255,182,213,.85), 0 0 40px rgba(255,80,160,.45);
+  }
+  .hf-grid { columns: 2; column-gap: clamp(14px, 3.5vw, 28px); }
+  @media (min-width: 720px)  { .hf-grid { columns: 3; } }
+  @media (min-width: 1100px) { .hf-grid { columns: 4; } }
+
+  /* Bingkai: kayu-emas tipis, alas putih, sedikit miring seperti dipajang */
+  .hf-frame {
+    break-inside: avoid; -webkit-column-break-inside: avoid;
+    display: block; margin: 0 0 clamp(18px, 4vw, 30px);
+    padding: clamp(6px, 1.4vw, 10px);
+    background: linear-gradient(135deg, #f6d9a5 0%, #b98a4c 28%, #f3d39a 52%, #9c6b33 78%, #e9c88d 100%);
+    border-radius: 3px;
+    box-shadow:
+      0 14px 30px rgba(0,0,0,.55),
+      0 2px 6px rgba(0,0,0,.4),
+      inset 0 0 0 1px rgba(255,255,255,.35),
+      inset 0 0 6px rgba(80,40,10,.55);
+    opacity: 0; transform: translateY(26px) rotate(var(--tilt)) scale(.97);
+    transition: opacity .9s ease, transform .9s cubic-bezier(.2,.8,.2,1);
+  }
+  .hf-frame.is-in { opacity: 1; transform: rotate(var(--tilt)); }
+  .hf-mat {
+    background: #fbf6ef;
+    padding: clamp(6px, 1.6vw, 12px);
+    box-shadow: inset 0 0 0 1px rgba(120,80,40,.25), inset 0 2px 8px rgba(0,0,0,.18);
+  }
+  .hf-mat img {
+    display: block; width: 100%; height: auto;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.08);
+  }
+  .hf-frame figcaption {
+    margin: 0; padding: 4px 0 2px; text-align: center;
+    background: #fbf6ef; color: #3a2430;
+    font-size: clamp(15px, 3.6vw, 20px); line-height: 1.2;
+  }
+  .hf-frame { position: relative; }
+  .hf-frame::before, .hf-frame::after { pointer-events: none; }
+
+  /* v0 — emas klasik (gaya dasar di atas) */
+
+  /* v1 — polaroid dengan selotip washi merah muda bermotif hati */
+  .hf-v1 {
+    margin-top: 14px;
+    background: #fffdf9; padding: clamp(7px, 1.6vw, 11px) clamp(7px, 1.6vw, 11px) 0;
+    border-radius: 2px;
+    box-shadow: 0 16px 30px rgba(0,0,0,.5), 0 2px 5px rgba(0,0,0,.35);
+  }
+  .hf-v1 .hf-mat { background: none; padding: 0; box-shadow: none; }
+  .hf-v1 figcaption { background: none; padding: 8px 0 10px; color: #c2185b; }
+  .hf-v1::before {
+    content: ''; position: absolute; top: -12px; left: 50%;
+    width: 46%; height: 24px; transform: translateX(-50%) rotate(-3deg);
+    background:
+      radial-gradient(circle at 6px 6px, rgba(255,255,255,.75) 1.6px, transparent 2px) 0 0 / 12px 12px,
+      linear-gradient(90deg, rgba(255,128,180,.82), rgba(255,170,205,.82));
+    box-shadow: 0 1px 3px rgba(0,0,0,.25);
+    clip-path: polygon(2% 0, 98% 6%, 100% 50%, 97% 100%, 3% 94%, 0 50%);
+  }
+
+  /* v2 — beludru merah-muda tua dengan hati emas di keempat sudut */
+  .hf-v2 {
+    padding: clamp(10px, 2.2vw, 16px);
+    background:
+      radial-gradient(120% 120% at 30% 20%, #b0305f 0%, #7a1c43 55%, #4a0f28 100%);
+    border-radius: 6px;
+    box-shadow: 0 16px 32px rgba(0,0,0,.55), inset 0 0 0 2px rgba(255,214,140,.55), inset 0 0 14px rgba(0,0,0,.5);
+  }
+  .hf-v2 .hf-mat { background: #fff6f9; box-shadow: inset 0 0 0 1px rgba(176,48,95,.35); }
+  .hf-v2 figcaption { background: #fff6f9; color: #9b1f50; }
+  /* Hati emas di keempat sudut: 2 dari bingkai, 2 dari alas (alas tidak diposisikan, jadi ikut bingkai) */
+  .hf-v2::before, .hf-v2::after, .hf-v2 .hf-mat::before, .hf-v2 .hf-mat::after {
+    content: '\\2665'; position: absolute;
+    font-size: clamp(11px, 2.4vw, 15px); line-height: 1; color: #f3d08a;
+    text-shadow: 0 0 6px rgba(255,200,120,.7);
+  }
+  .hf-v2::before { top: 3px; left: 4px; }
+  .hf-v2::after { top: 3px; right: 4px; }
+  .hf-v2 .hf-mat::before { bottom: 3px; left: 4px; }
+  .hf-v2 .hf-mat::after { bottom: 3px; right: 4px; }
+
+  /* v3 — renda putih dengan jahitan putus-putus */
+  .hf-v3 {
+    padding: clamp(10px, 2vw, 14px);
+    background: #fffaf6;
+    border-radius: 4px;
+    /* tepi bergelombang atas & bawah seperti renda */
+    -webkit-mask:
+      radial-gradient(circle 5px at 7px 5px, #000 98%, transparent) 0 0 / 14px 10px repeat-x,
+      linear-gradient(#000, #000) 0 5px / 100% calc(100% - 10px) no-repeat,
+      radial-gradient(circle 5px at 7px 5px, #000 98%, transparent) 0 100% / 14px 10px repeat-x;
+            mask:
+      radial-gradient(circle 5px at 7px 5px, #000 98%, transparent) 0 0 / 14px 10px repeat-x,
+      linear-gradient(#000, #000) 0 5px / 100% calc(100% - 10px) no-repeat,
+      radial-gradient(circle 5px at 7px 5px, #000 98%, transparent) 0 100% / 14px 10px repeat-x;
+    box-shadow: none;
+  }
+  .hf-v3 .hf-mat {
+    background: #fffaf6; padding: clamp(6px, 1.4vw, 9px);
+    box-shadow: none; outline: 2px dashed rgba(214,120,160,.7); outline-offset: -4px;
+  }
+  .hf-v3 figcaption { background: #fffaf6; color: #b0305f; padding-bottom: 6px; }
+
+  /* v4 — kayu gelap dengan peniti hati merah di atas */
+  .hf-v4 {
+    margin-top: 12px;
+    padding: clamp(8px, 1.8vw, 13px);
+    background:
+      repeating-linear-gradient(92deg, rgba(255,255,255,.04) 0 2px, transparent 2px 7px),
+      linear-gradient(135deg, #6b3f26, #3e2316 60%, #5a331e);
+    border-radius: 3px;
+    box-shadow: 0 16px 30px rgba(0,0,0,.6), inset 0 0 0 1px rgba(255,220,180,.18), inset 0 0 10px rgba(0,0,0,.6);
+  }
+  .hf-v4 .hf-mat { background: #f7efe4; }
+  .hf-v4 figcaption { background: #f7efe4; color: #5a331e; }
+  .hf-v4::before {
+    content: '\\2665'; position: absolute; top: -14px; left: 50%; transform: translateX(-50%);
+    font-size: 24px; line-height: 1; color: #e0245e;
+    text-shadow: 0 2px 4px rgba(0,0,0,.55), 0 0 10px rgba(255,60,120,.6);
+    z-index: 2;
+  }
+
+  /* v5 — neon merah muda bercahaya */
+  .hf-v5 {
+    padding: clamp(6px, 1.4vw, 9px);
+    background: rgba(20,0,20,.55);
+    border: 2px solid #ff69b4; border-radius: 16px;
+    box-shadow: 0 0 10px rgba(255,105,180,.9), 0 0 26px rgba(255,20,147,.55), inset 0 0 12px rgba(255,105,180,.45);
+    animation: hfNeon 3.2s ease-in-out infinite;
+  }
+  .hf-v5 .hf-mat { background: none; padding: 0; box-shadow: none; border-radius: 10px; overflow: hidden; }
+  .hf-v5 figcaption {
+    background: none; color: #ffd1e6; padding: 6px 0 2px;
+    text-shadow: 0 0 8px rgba(255,105,180,.95);
+  }
+  @keyframes hfNeon {
+    0%,100% { box-shadow: 0 0 10px rgba(255,105,180,.9), 0 0 26px rgba(255,20,147,.55), inset 0 0 12px rgba(255,105,180,.45); }
+    50%     { box-shadow: 0 0 16px rgba(255,105,180,1), 0 0 40px rgba(255,20,147,.75), inset 0 0 16px rgba(255,105,180,.6); }
+  }
+  .hf-end {
+    margin: clamp(20px, 5vh, 48px) 0 0; text-align: center;
+    font-size: clamp(30px, 8vw, 54px); color: #fff0f6;
+    text-shadow: 0 0 18px rgba(255,182,213,.85), 0 0 40px rgba(255,80,160,.45);
+  }
+  @keyframes hfBob { 0%,100% { transform: translateY(0) } 50% { transform: translateY(5px) } }
+`

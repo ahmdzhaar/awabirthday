@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-const SRC = '/video/nyanyi.mp4'
-const POSTER = '/video/nyanyi-poster.jpg'
+const SRC = '/video/nyanyi-v2.mp4'
+const POSTER = '/video/nyanyi-v2-poster.jpg'
 const BACKDROP = '/photobook/02.webp'
 const TITLE = 'Lagu Untukmu'
 const NEXT_COUNTDOWN = 10

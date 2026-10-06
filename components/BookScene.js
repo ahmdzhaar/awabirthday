@@ -23,10 +23,13 @@ const PAD = 0.045         // tebal sampul (case) di sekeliling halaman, relatif 
 const STACK = 0.03        // tebal maksimum tumpukan kertas
 
 const isTouchDevice = () => window.matchMedia('(pointer: coarse)').matches
+// Tombol putar ditampilkan di semua HP/tablet, dan di layar mana pun yang sedang tegak
+const wantsRotateBtn = () => isTouchDevice() || window.innerWidth < window.innerHeight
 
 // Masuk layar penuh + kunci orientasi landscape (Android). iOS tidak mendukung,
 // jadi pemanggil jatuh ke mode putar CSS.
 async function tryLockLandscape() {
+  if (!isTouchDevice()) return
   const attempt = (async () => {
     try {
       const el = document.documentElement
@@ -49,10 +52,27 @@ function computeLayout(forced) {
   const rotated = forced && window.innerWidth < window.innerHeight
   const vw = rotated ? window.innerHeight : window.innerWidth
   const vh = rotated ? window.innerWidth : window.innerHeight
-  const availW = vw - (vw < 600 ? 10 : 24)
-  // Sisakan ruang untuk teks petunjuk (+ tombol putar di perangkat sentuh)
-  const availH = vh * (forced ? 0.9 : 0.8) - (isTouchDevice() ? 86 : 40)
-  const raw = Math.min(availW / (2 + PAD * 2 + STACK * 2), availH / (RATIO + PAD * 2), 520)
+  // Lebar halaman terbesar yang muat di area aw × ah
+  const fit = (aw, ah) => Math.min(aw / (2 + PAD * 2 + STACK * 2), ah / (RATIO + PAD * 2), 520)
+
+  // Ikon musik & putar (40px, 14px dari tepi atas kanan) tidak boleh tertutup buku.
+  const ICONS_H = 58   // tinggi pita ikon dari tepi atas
+  const ICONS_W = 110  // lebar pita ikon dari tepi kanan
+  // Mode menyamping: petunjuk ditumpuk di atas buku. Mode biasa: satu baris petunjuk di bawah buku.
+  const hint = forced ? 26 : 52
+  const side = vw < 600 ? 10 : 24
+
+  let raw
+  if (rotated) {
+    // Diputar CSS: tepi atas layar = sisi kiri isi, jadi ruang ikon dipotong dari lebar (simetris)
+    raw = fit(vw - ICONS_H * 2, vh - 26)
+  } else {
+    // Pilih yang menghasilkan buku terbesar: sisakan ruang ikon di atas, atau di kiri-kanan
+    raw = Math.max(
+      fit(vw - side, vh - ICONS_H * 2 - hint),
+      fit(vw - ICONS_W * 2, vh - hint),
+    )
+  }
 
   const w = Math.max(100, Math.floor(raw))
   const h = Math.floor(w * RATIO)
@@ -152,9 +172,14 @@ export default function BookScene({ onDone }) {
   // Kembalikan orientasi & keluar layar penuh saat meninggalkan photobook
   useEffect(() => () => { if (forcingRef.current) releaseLandscape() }, [])
 
-  // Tombol putar hanya untuk perangkat layar sentuh (HP/tablet)
-  const [touch, setTouch] = useState(false)
-  useEffect(() => { setTouch(isTouchDevice()) }, [])
+  // Tombol putar: semua HP/tablet + layar tegak, diperbarui saat ukuran layar berubah
+  const [showRotate, setShowRotate] = useState(false)
+  useEffect(() => {
+    const update = () => setShowRotate(wantsRotateBtn())
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
 
   // Tombol putar: masuk/keluar mode menyamping. Kalau layar masih tegak, isi scene diputar CSS.
   const toggleLandscape = async (e) => {
@@ -324,29 +349,32 @@ export default function BookScene({ onDone }) {
           </div>
         </div>
 
-        <p className="pb-hint">
+        {/* Tanpa nomor halaman: hanya petunjuk di sampul depan & belakang.
+            Saat menyamping, petunjuk ditumpuk di atas tepi bawah supaya buku bisa sebesar mungkin. */}
+        <p className={`pb-hint${forced ? ' is-overlay' : ''}`}>
           {!ready ? 'menyiapkan photobook...'
             : isCover ? 'geser atau ketuk sisi kanan buku untuk membuka...'
-            : isEnd ? (tapped ? '' : 'ketuk buku untuk melanjutkan ♥')
-            : `${page}–${page + 1} / ${TOTAL - 2}`}
+            : isEnd && !tapped ? 'ketuk buku untuk melanjutkan ♥'
+            : ''}
         </p>
-
-        {touch && ready && (
-          <button
-            type="button"
-            className={`pb-rotate${forced ? ' is-on' : ''}`}
-            onClick={toggleLandscape}
-            aria-label={forced ? 'Kembalikan ke tampilan tegak' : 'Putar ke tampilan menyamping'}
-          >
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-              <rect x="7" y="2.5" width="10" height="19" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8"
-                transform={forced ? undefined : 'rotate(90 12 12)'} />
-              <path d="M19.5 8.5a8 8 0 0 0-5-5M14.5 3.5l.2 2.6M14.5 3.5l2.5-.6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-            </svg>
-            {forced ? 'Tampilan tegak' : 'Putar layar'}
-          </button>
-        )}
       </div>
+
+      {/* Tombol putar berupa ikon, di samping tombol musik */}
+      {(showRotate || forced) && (
+        <button
+          type="button"
+          className={`pb-rotate${forced ? ' is-on' : ''}`}
+          onClick={toggleLandscape}
+          aria-label={forced ? 'Kembalikan ke tampilan tegak' : 'Putar ke tampilan menyamping'}
+          title={forced ? 'Tampilan tegak' : 'Putar layar'}
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <rect x="8" y="3" width="8" height="14" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.8"
+              transform={forced ? 'rotate(90 12 10)' : undefined} />
+            <path d="M4 15a8 8 0 0 0 7 6.5M4 15l-.6 2.6M4 15l2.5.9" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+      )}
       </div>
     </>
   )
@@ -503,22 +531,29 @@ const CSS = `
     animation: pbFrameIn .5s cubic-bezier(.34,1.56,.64,1) forwards;
   }
   .pb-rotate {
-    display: inline-flex; align-items: center; gap: 8px;
-    padding: 8px 16px; border-radius: 999px; cursor: pointer;
-    border: 1px solid rgba(255,182,217,.55);
-    background: rgba(255,20,147,.14); color: #ffd1e6;
-    font-family: Georgia, 'Times New Roman', serif; font-size: 13px; letter-spacing: .03em;
-    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
-    transition: background .2s ease, transform .15s ease;
+    position: fixed; top: 14px; right: 62px; z-index: 9999;
+    width: 40px; height: 40px; border-radius: 50%; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid rgba(255,105,180,.4);
+    background: rgba(255,20,147,.15); color: #ff69b4;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    cursor: pointer; transition: all .3s;
+    animation: pbFadeIn .5s ease both;
   }
-  .pb-rotate:active { transform: scale(.96); }
-  .pb-rotate.is-on { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.35); color: #fff; }
+  .pb-rotate:active { transform: scale(.92); }
+  .pb-rotate.is-on { border-color: #ff69b4; box-shadow: 0 0 16px rgba(255,20,147,.45); }
+  @keyframes pbFadeIn { from { opacity: 0; transform: scale(.8) } to { opacity: 1; transform: none } }
   .pb-hint {
     margin: 0; min-height: 20px;
     color: rgba(255,182,217,.85);
     font-family: 'Dancing Script', cursive; font-size: 16px;
     animation: pbHint 2.2s ease-in-out infinite;
     pointer-events: none; text-align: center; padding: 0 16px;
+  }
+  .pb-hint:empty { display: none; }
+  .pb-hint.is-overlay {
+    position: absolute; left: 0; right: 0; bottom: 2px;
+    font-size: 14px; min-height: 0;
   }
 
   @keyframes pbFloat { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-8px) } }
